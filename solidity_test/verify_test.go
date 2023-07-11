@@ -23,7 +23,7 @@ func Test_Verify_Proof_GoVRF_Vs_SolidityVRF(t *testing.T) {
 		t.Errorf("start up Ganache client, to connect with client: %s", err)
 	}
 
-	privateKey, err := crypto.HexToECDSA("46dbea7b5d1b58285aa09e10aabf32a99a344385579c0bd1432f7d6ead2c8dd4") //Use account 1 provided by Ganache client
+	privateKey, err := crypto.HexToECDSA("7089d6f4899f23a399b1eefe4db713a656ecc0f3700579f09f37559cc278d35e") //Use account 1 provided by Ganache client
 	if err != nil {
 		t.Errorf("error with node signing key: %s", err)
 	}
