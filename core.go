@@ -1,15 +1,18 @@
-// Copyright (c) 2020 vechain.org.
-// Licensed under the MIT license.
+//Copyright (c) 2020 - 2023 vechain.org.
+//Copyright (c) 2023 digioracle.link
+//Licensed under the MIT license.
 
 package ecvrf
 
 import (
 	"crypto/elliptic"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"hash"
 	"math/big"
-
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 type point struct {
@@ -58,10 +61,12 @@ func (c *core) Unmarshal(in []byte) *point {
 
 func (c *core) ScalarMult(pt *point, k []byte) *point {
 	x, y := c.Curve.ScalarMult(pt.X, pt.Y, k)
+
 	return &point{x, y}
 }
 
 func (c *core) ScalarBaseMult(k []byte) *point {
+
 	x, y := c.Curve.ScalarBaseMult(k)
 	return &point{x, y}
 }
@@ -119,6 +124,52 @@ func (c *core) HashToCurveTryAndIncrement(pk *point, alpha []byte) (*point, erro
 	return nil, errors.New("no valid point found")
 }
 
+// HashToCurveTryAndIncrementV2 takes in the VRF input `alpha` and converts it to H, using the try_and_increment algorithm.
+// See: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-vrf-10.html#name-ecvrf-hash-to-curve
+func (c *core) HashToCurveTryAndIncrementSecp256k1(pk *point, alpha []byte) (*point, error) {
+	//hasher := c.getHasher()
+	//hash := make([]byte, 1+hasher.Size())
+	//hash[0] = 2 // compress format
+
+	// step 1: ctr = 0
+	ctr := 0
+
+	// step 2: PK_string = point_to_string(Y)
+	pkBytes := c.Marshal(pk)
+
+	// step 3 ~ 6
+	//prefix := []byte{c.SuiteString, 0x01}
+	//suffix := []byte{0}
+	for ; ctr < 256; ctr++ {
+		h := sha256.New()
+		h.Reset()
+		h.Write([]byte{c.SuiteString})
+		h.Write([]byte{0x01})
+		h.Write(pkBytes)
+		h.Write(alpha)
+		h.Write([]byte{byte(ctr)})
+		h.Write([]byte{0x0})
+
+		hString := hex.EncodeToString(h.Sum(nil))
+		hString = "02" + hString
+
+		hWithPrefix, err := hex.DecodeString(hString)
+		if err != nil {
+			panic(err)
+		}
+
+		// H = arbitrary_string_to_point(hash_string)
+		if H := c.Unmarshal(hWithPrefix); H != nil {
+			if c.Cofactor > 1 {
+				// If H is not "INVALID" and cofactor > 1, set H = cofactor * H
+				H = c.ScalarMult(H, []byte{c.Cofactor})
+			}
+			return H, nil
+		}
+	}
+	return nil, errors.New("no valid point found")
+}
+
 // See: [draft-irtf-cfrg-vrf-06 section 5.4.3](https://tools.ietf.org/id/draft-irtf-cfrg-vrf-06.html#rfc.section.5.4.3)
 func (c *core) HashPoints(points ...*point) *big.Int {
 	hasher := c.getHasher()
@@ -127,6 +178,25 @@ func (c *core) HashPoints(points ...*point) *big.Int {
 		hasher.Write(c.Marshal(pt))
 	}
 	return bits2int(hasher.Sum(nil), c.N()*8)
+}
+
+func (c *core) HashPointsSecp256k1(points ...*point) *big.Int {
+	twoBytes := []byte{c.SuiteString, 0x02}
+
+	hh := sha256.New()
+	hh.Reset()
+	hh.Write(twoBytes)
+
+	for _, pt := range points {
+		hh.Write(c.Marshal(pt))
+	}
+
+	hh.Write([]byte{0x00})
+
+	cString := hh.Sum(nil)
+	truncatedCstring := cString[:16]
+
+	return new(big.Int).SetBytes(truncatedCstring)
 }
 
 func (c *core) GammaToHash(gamma *point) []byte {
@@ -138,6 +208,22 @@ func (c *core) GammaToHash(gamma *point) []byte {
 	hasher.Write([]byte{c.SuiteString, 0x03})
 	hasher.Write(c.Marshal(gammaCof))
 	return hasher.Sum(nil)
+}
+
+func (c *core) GammaToHashSecp256k1(gamma *point) []byte {
+	gammaCof := gamma
+	if c.Cofactor != 1 {
+		gammaCof = c.ScalarMult(gamma, []byte{c.Cofactor})
+	}
+
+	h := sha256.New()
+	h.Reset()
+	h.Write([]byte{c.SuiteString})
+	h.Write([]byte{0x03})
+	h.Write(c.Marshal(gammaCof))
+	h.Write([]byte{0x00})
+
+	return h.Sum(nil)
 }
 
 func (c *core) EncodeProof(gamma *point, C, S *big.Int) []byte {
@@ -156,6 +242,7 @@ func (c *core) DecodeProof(pi []byte) (gamma *point, C, S *big.Int, err error) {
 		clen  = c.N()
 		slen  = (c.Q().BitLen() + 7) / 8
 	)
+
 	if len(pi) != ptlen+clen+slen {
 		err = errors.New("invalid proof length")
 		return
@@ -190,6 +277,56 @@ func (c *core) rfc6979nonce(sk *big.Int, m []byte) []byte {
 
 	nonce := secp256k1.NonceRFC6979(bx, bh, nil, nil, 0).Bytes()
 	return nonce[:]
+}
+
+// https://datatracker.ietf.org/doc/html/rfc6979#section-3.2
+func (c *core) rfc6979nonceSecp256k1(sk *big.Int, h []byte) []byte {
+
+	skb := new(big.Int).Set(sk).Bytes()[:32]
+	h1 := sha256.Sum256(h)
+	K := []byte("0000000000000000000000000000000000000000000000000000000000000000")
+	V := []byte("1111111111111111111111111111111111111111111111111111111111111111")
+	zeroByte := []byte{0x00}
+	oneByte := []byte{0x01}
+
+	//739308f8d19be96040369a5358519ebc6cfc260b941b1f1dc152270e6e07beb1
+	hk1 := hmac.New(sha256.New, K)
+	hk1.Reset()
+	hk1.Write(V)
+	hk1.Write(zeroByte)
+	hk1.Write(skb)
+	hk1.Write(h1[:])
+
+	K = hk1.Sum(nil)
+
+	hv1 := hmac.New(sha256.New, []byte(hex.EncodeToString(K)))
+	hv1.Reset()
+	hv1.Write(V)
+
+	V = hv1.Sum(nil)
+
+	hk2 := hmac.New(sha256.New, []byte(hex.EncodeToString(K)))
+	hk2.Reset()
+	hk2.Write([]byte(hex.EncodeToString(V)))
+	hk2.Write(oneByte)
+	hk2.Write(skb)
+	hk2.Write(h1[:])
+
+	K = hk2.Sum(nil)
+
+	hv2 := hmac.New(sha256.New, []byte(hex.EncodeToString(K)))
+	hv2.Reset()
+	hv2.Write([]byte(hex.EncodeToString(V)))
+
+	V = hv2.Sum(nil)
+
+	hv3 := hmac.New(sha256.New, []byte(hex.EncodeToString(K)))
+	hv3.Reset()
+	hv3.Write([]byte(hex.EncodeToString(V)))
+
+	V = hv3.Sum(nil)
+
+	return V
 }
 
 // https://tools.ietf.org/html/rfc6979#section-2.3.2

@@ -1,5 +1,6 @@
-// Copyright (c) 2020 vechain.org.
-// Licensed under the MIT license.
+//Copyright (c) 2020 - 2023 vechain.org.
+//Copyright (c) 2023 digioracle.link
+//Licensed under the MIT license.
 
 // Package ecvrf is the Elliptic Curve Verifiable Random Function (VRF) library.
 package ecvrf
@@ -20,9 +21,13 @@ type VRF interface {
 	// using the private key `sk`. The hash output is returned as `beta`.
 	Prove(sk *ecdsa.PrivateKey, alpha []byte) (beta, pi []byte, err error)
 
+	ProveSecp256k1(sk *ecdsa.PrivateKey, alpha []byte) (beta, pi []byte, err error)
+
 	// Verify checks the proof `pi` of the message `alpha` against the given
 	// public key `pk`. The hash output is returned as `beta`.
 	Verify(pk *ecdsa.PublicKey, alpha, pi []byte) (beta []byte, err error)
+
+	VerifySecp256k1(pk *ecdsa.PublicKey, alpha, pi []byte) (beta []byte, err error)
 }
 
 var (
@@ -128,6 +133,58 @@ func (v *vrf) Prove(sk *ecdsa.PrivateKey, alpha []byte) (beta, pi []byte, err er
 	return
 }
 
+// ProveV2 constructs VRF proof following https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-vrf-10.html#name-ecvrf-proving
+func (v *vrf) ProveSecp256k1(sk *ecdsa.PrivateKey, alpha []byte) (beta, pi []byte, err error) {
+	var (
+		core = core{Config: &v.cfg}
+		q    = core.Q()
+	)
+
+	// step 1 is done by the caller.
+	// step 2: H = ECVRF_hash_to_curve(suite_string, Y, alpha_string)
+	// currently, try_and_increment algorithm is supported
+	H, err := core.HashToCurveTryAndIncrementSecp256k1(&point{sk.X, sk.Y}, alpha)
+	if err != nil {
+		return
+	}
+
+	// step 3: h_string = point_to_string(H)
+	hbytes := core.Marshal(H)
+
+	// step 4: Gamma = x * H
+	gamma := core.ScalarMult(H, sk.D.Bytes())
+
+	// step 5: k = ECVRF_nonce_generation(SK, h_string)
+	// it follows RFC6979
+	//kbytes := core.rfc6979nonce(sk.D, hbytes)
+	kbytes := core.rfc6979nonceSecp256k1(sk.D, hbytes)
+	k := new(big.Int).SetBytes(kbytes)
+
+	// step 6: c = ECVRF_hash_points(H, Gamma, k*B, k*H)
+	kB := core.ScalarBaseMult(kbytes)
+
+	kH := core.ScalarMult(H, kbytes)
+
+	c := core.HashPointsSecp256k1(
+		H,
+		gamma,
+		kB,
+		kH)
+
+	// step 7: s = (k + c*x) mod q
+	s := new(big.Int).Mul(c, sk.D)
+	s.Add(s, k)
+	s.Mod(s, q)
+
+	// step 8: encode (gamma, c, s) as pi_string = point_to_string(Gamma) || int_to_string(c, n) || int_to_string(s, qLen)
+	pi = core.EncodeProof(gamma, c, s)
+
+	// step 9: Output pi_string
+	// here also returns beta
+	beta = core.GammaToHashSecp256k1(gamma)
+	return
+}
+
 // Verify checks the correctness of proof following [draft-irtf-cfrg-vrf-06 section 5.3](https://tools.ietf.org/id/draft-irtf-cfrg-vrf-06.html#rfc.section.5.3).
 func (v *vrf) Verify(pk *ecdsa.PublicKey, alpha, pi []byte) (beta []byte, err error) {
 	core := core{Config: &v.cfg}
@@ -166,5 +223,45 @@ func (v *vrf) Verify(pk *ecdsa.PublicKey, alpha, pi []byte) (beta []byte, err er
 	}
 
 	beta = core.GammaToHash(gamma)
+	return
+}
+
+func (v *vrf) VerifySecp256k1(pk *ecdsa.PublicKey, alpha, pi []byte) (beta []byte, err error) {
+	core := core{Config: &v.cfg}
+	// step 1: D = ECVRF_decode_proof(pi_string)
+	gamma, c, s, err := core.DecodeProof(pi)
+
+	// step 2: If D is "INVALID", output "INVALID" and stop
+	if err != nil {
+		return
+	}
+	// step 3: (Gamma, c, s) = D
+
+	// step 4: H = ECVRF_hash_to_curve(suite_string, Y, alpha_string)
+	H, err := core.HashToCurveTryAndIncrementSecp256k1(&point{pk.X, pk.Y}, alpha)
+	if err != nil {
+		return
+	}
+
+	// step 5: U = s*B - c*Y
+	sB := core.ScalarBaseMult(s.Bytes())
+	cY := core.ScalarMult(&point{pk.X, pk.Y}, c.Bytes())
+	U := core.Sub(sB, cY)
+
+	// step 6: V = s*H - c*Gamma
+	sH := core.ScalarMult(H, s.Bytes())
+	cGamma := core.ScalarMult(gamma, c.Bytes())
+	V := core.Sub(sH, cGamma)
+
+	// step 7: c' = ECVRF_hash_points(H, Gamma, U, V)
+	derivedC := core.HashPointsSecp256k1(H, gamma, U, V)
+
+	// step 8: If c and c' are equal, output ("VALID", ECVRF_proof_to_hash(pi_string)); else output "INVALID"
+	if derivedC.Cmp(c) != 0 {
+		err = errors.New("invalid proof")
+		return
+	}
+
+	beta = core.GammaToHashSecp256k1(gamma)
 	return
 }

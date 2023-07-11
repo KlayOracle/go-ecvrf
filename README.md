@@ -1,114 +1,63 @@
-# go-ecvrf
+# Note
 
-[![GoDoc Reference](https://godoc.org/github.com/vechain/go-ecvrf?status.svg)](https://pkg.go.dev/github.com/vechain/go-ecvrf)
-[![Travis](https://travis-ci.org/vechain/go-ecvrf.svg?branch=master)](https://travis-ci.org/vechain/go-ecvrf)
-[![License](https://img.shields.io/github/license/vechain/go-ecvrf)](https://github.com/vechain/go-ecvrf/blob/master/LICENSE)
+Golang implementation of Elliptic Curve Verifiable Random Function (VRF).
 
-Golang implementation of Elliptic Curve Verifiable Random Function (VRF) follows [draft-irtf-cfrg-vrf-06](https://tools.ietf.org/id/draft-irtf-cfrg-vrf-06.html) and [RFC 6979](https://tools.ietf.org/html/rfc6979).
+This library has test to both show the generation of prove in Golang and verification of prove in Solidity using **SECP256K1_SHA256_TAI** cipher suite.
 
-# What's VRF
+Changes Introduced to [VeChain go-ecvrf](https://github.com/vechain/go-ecvrf) following https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-vrf-10.html#name-elliptic-curve-vrf-ecvrf
+and https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-vrf-10.html#name-ecvrf-ciphersuites includes:
 
-A Verifiable Random Function (VRF) is the public-key version of a keyed cryptographic hash. Only the holder of the private key can compute the hash, but anyone with public key can verify the correctness of the hash.
+- ProveSecp256k1
+- VerifySecp256k1
+- HashToCurveTryAndIncrementSecp256k1
+- rfc6979nonceSecp256k1
+- HashPointsSecp256k1
+- GammaToHashSecp256k1
+- VerifySecp256k1
 
-A key application of the VRF is to provide privacy against offline enumeration (e.g. dictionary attacks) on data stored in a hash-based data structure. In this application, a Prover holds the VRF private key and uses the VRF hashing to construct a hash-based data structure on the input data. Due to the nature of the VRF, only the Prover can answer queries about whether or not some data is stored in the data structure. Anyone who knows the public VRF key can verify that the Prover has answered the queries correctly. However no offline inferences (i.e. inferences without querying the Prover) can be made about the data stored in the data strucuture.
+## Usage
 
-# Installation
+```shell
+skBytes, _ := hex.DecodeString("b920c2c0cf474d02727d7215089d473580943c9e1f6f91d47c3cd025f0d10438")
+sk := secp256k1.PrivKeyFromBytes(skBytes)
+alpha, _ := hex.DecodeString("73616d706c65")
 
-```
-go get -u github.com/vechain/go-ecvrf
-```
+vrf := Secp256k1Sha256Tai
 
-# Examples
+beta, pi, err := vrf.ProveSecp256k1(sk, alpha)
 
-Using SECP256K1_SHA256_TAI cipher suite:
+if err != nil {
+  panic(err)
+}
 
-* VRF Proving
+compareBeta, err := vrf.VerifySecp256k1(sk.PubKey().ToECDSA(), alpha, pi)
+if err != nil {
+  panic(err)
+}
 
-    ```golang
-    // the private key
-    var sk *ecdsa.PrivateKey
-    // code to load sk
-    // ... 
-
-    // the input to be hashed by the VRF
-    alpha := "Hello VeChain"
-
-    // `beta`: the VRF hash output
-    // `pi`: the VRF proof
-    beta, pi, err := ecvrf.Secp256k1Sha256Tai.Prove(sk, []byte(alpha))
-    if err != nil {
-        // something wrong.
-        // most likely sk is not properly loaded.
-        return
-    }
-    ```
-
-* VRF Verifying
-
-    ```golang 
-    // the public key
-    var pk *ecdsa.PublicKey
-    // code to load pk
-    // ...
-
-    // the input to be hashed by the VRF
-    alpha := "Hello VeChain"
-
-    // `pi` is the VRF proof
-    beta, err := ecvrf.Secp256k1Sha256Tai.Verify(pk, []byte(alpha), pi)
-    if err != nil {
-        // invalid proof
-        return
-    }
-
-    // got correct beta
-    ```
-
-
-# Supported Cipher Suites
-
-* P256_SHA256_TAI 
-* SECP256K1_SHA256_TAI
-
-It's easy to extends this library to use different Weierstrass curves and Hash algorithms, by providing cooked `Config` like:
-
-```golang
-// the following codes build a new P256_SHA256_TAI VRF object.
-vrf := ecvrf.New(&ecvrf.Config{
-    Curve:       elliptic.P256(),
-    SuiteString: 0x01,
-    Cofactor:    0x01,
-    NewHasher:   sha256.New,
-    Decompress: elliptic.UnmarshalCompressed,
-})
+fmt.Println(beta)
+fmt.Println(compareBeta)
 ```
 
-# Benchmark
-
-```bash
-$ go test -benchmem -run=^$ -bench ^BenchmarkVRF$ github.com/vechain/go-ecvrf -benchtime=5s
-goos: linux
-goarch: amd64
-pkg: github.com/vechain/go-ecvrf
-cpu: Intel(R) Core(TM) i7-6700 CPU @ 3.40GHz
-BenchmarkVRF/secp256k1sha256tai-proving-8         	   22207	    279600 ns/op	    4881 B/op	      95 allocs/op
-BenchmarkVRF/secp256k1sha256tai-verifying-8       	   15150	    399938 ns/op	    5009 B/op	     114 allocs/op
-BenchmarkVRF/p256sha256tai-proving-8              	   31328	    193911 ns/op	    9083 B/op	     294 allocs/op
-BenchmarkVRF/p256sha256tai-verifying-8            	   19875	    300613 ns/op	   19472 B/op	     515 allocs/op
-PASS
-ok  	github.com/vechain/go-ecvrf	36.060s
+## Installation 
+```shell
+go get -u github.com/klayoracle/go-ecvrf
 ```
+
+## Note
+
+Check [Vechain go-ecvrf Readme](https://github.com/vechain/go-ecvrf) for customization using a different 
+cipher suite asides **SECP256K1_SHA256_TAI** or **P256_SHA256_TAI**.
 
 # References
 
-* [draft-irtf-cfrg-vrf-06](https://tools.ietf.org/id/draft-irtf-cfrg-vrf-06.html)
-* [RFC 6979](https://tools.ietf.org/html/rfc6979)
-* [witnet/vrf-rs](https://github.com/witnet/vrf-rs)
-* [google/keytransparency](https://github.com/google/keytransparency)
+* [draft-irtf-cfrg-vrf-10](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-vrf-10.html#nonceP256)
+* [go-ecvrf](https://github.com/vechain/go-ecvrf)
 
 # License
 
-Copyright (c) 2020 vechain.org.
+Copyright (c) 2020 - 2023 vechain.org.
+Copyright (c) 2023 digioracle.link
 Licensed under the MIT license.
 
 

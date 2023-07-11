@@ -1,5 +1,6 @@
-// Copyright (c) 2022 vechain.org.
-// Licensed under the MIT license.
+//Copyright (c) 2020 - 2023 vechain.org.
+//Copyright (c) 2023 digioracle.link
+//Licensed under the MIT license.
 
 package ecvrf
 
@@ -9,15 +10,14 @@ import (
 	"crypto/elliptic"
 	"encoding/hex"
 	"encoding/json"
-	"io/ioutil"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"io"
 	"math/big"
 	"math/rand"
 	"os"
 	"reflect"
 	"testing"
 	"testing/quick"
-
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 // Case Testing cases structure.
@@ -36,7 +36,7 @@ func readCases(fileName string) ([]Case, error) {
 	}
 	defer jsonFile.Close()
 
-	byteValue, err2 := ioutil.ReadAll(jsonFile)
+	byteValue, err2 := io.ReadAll(jsonFile)
 	if err2 != nil {
 		return nil, err2
 	}
@@ -87,7 +87,7 @@ func Test_Secp256K1Sha256Tai_vrf_Prove(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			v := vrf
-			gotBeta, gotPi, err := v.Prove(tt.sk, tt.alpha)
+			gotBeta, gotPi, err := v.ProveSecp256k1(tt.sk, tt.alpha)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("vrf.Prove() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -143,7 +143,7 @@ func Test_Secp256K1Sha256Tai_vrf_Verify(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			v := vrf
-			gotBeta, err := v.Verify(tt.pk, tt.alpha, tt.pi)
+			gotBeta, err := v.VerifySecp256k1(tt.pk, tt.alpha, tt.pi)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("vrf.Verify() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -195,7 +195,7 @@ func Test_Secp256K1Sha256Tai_vrf_Verify_bad_message(t *testing.T) {
 
 	t.Run(tt.name, func(t *testing.T) {
 		v := vrf
-		_, err := v.Verify(tt.pk, tt.alpha, tt.pi)
+		_, err := v.VerifySecp256k1(tt.pk, tt.alpha, tt.pi)
 		if (err != nil) != tt.wantErr {
 			t.Errorf("vrf.Verify() error = %v, wantErr %v", err, tt.wantErr)
 			return
